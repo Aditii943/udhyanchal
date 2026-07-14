@@ -137,30 +137,6 @@ select.filter:focus{outline:2px solid var(--amber); outline-offset:1px;}
 }
 .add-btn.on{background:var(--navy-2); color:#fff;}
 
-/* ---------- Quantity stepper ---------- */
-.qty-row{
-  margin-top:4px; display:flex; align-items:center; gap:4px;
-}
-.qty-btn{
-  width:26px; height:26px; flex:none; border:1px solid var(--navy-2); background:#fff;
-  color:var(--navy-2); border-radius:6px; font-size:15px; line-height:1; cursor:pointer;
-  font-family:var(--sans); display:flex; align-items:center; justify-content:center;
-}
-.qty-btn:hover{background:#EAF1F7;}
-.qty-input{
-  width:40px; height:26px; text-align:center; border:1px solid var(--line); border-radius:6px;
-  font-size:12.5px; font-family:var(--sans); color:var(--ink); padding:0 2px;
-  /* remove native spinner arrows for a cleaner look */
-  -moz-appearance:textfield;
-}
-.qty-input::-webkit-outer-spin-button,
-.qty-input::-webkit-inner-spin-button{-webkit-appearance:none; margin:0;}
-.qty-remove{
-  flex:1; border:1px solid var(--navy-2); background:var(--navy-2); color:#fff;
-  border-radius:7px; padding:0 8px; height:26px; font-size:12px; font-weight:600; cursor:pointer;
-  font-family:var(--sans); white-space:nowrap;
-}
-
 /* ---------- Empty state ---------- */
 .empty{
   max-width:1180px; margin:60px auto; padding:0 20px; text-align:center; color:var(--ink-soft);

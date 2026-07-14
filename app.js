@@ -8,7 +8,7 @@
     section: "",
     page: 1,
   };
-  let selected = new Map(); // id -> { product, qty }
+  let selected = new Map(); // id -> product
 
   const els = {
     search: document.getElementById("searchInput"),
@@ -102,21 +102,12 @@
 
   function cardHtml(p) {
     const isSel = selected.has(p.id);
-    const qty = isSel ? selected.get(p.id).qty : 1;
     const priceHtml = p.price
       ? `<div class="card-price"><span class="p">₹${escapeHtml(p.price)}</span>${p.mrp ? `<span class="mrp">₹${escapeHtml(p.mrp)}</span>` : ""}</div>`
       : `<div class="card-price">&nbsp;</div>`;
     const imgHtml = p.img
       ? `<img src="images/${encodeURIComponent(p.img)}" alt="${escapeHtml(p.code)}" loading="lazy">`
       : `<div class="noimg">${escapeHtml(p.code)}<br>no photo</div>`;
-    const actionHtml = isSel
-      ? `<div class="qty-row">
-          <button class="qty-btn" data-action="dec" data-id="${p.id}">−</button>
-          <input class="qty-input" type="number" min="1" step="1" value="${qty}" data-action="qtyinput" data-id="${p.id}">
-          <button class="qty-btn" data-action="inc" data-id="${p.id}">+</button>
-          <button class="qty-remove" data-action="toggle" data-id="${p.id}" title="Remove from list">✓ Added</button>
-        </div>`
-      : `<button class="add-btn" data-action="toggle" data-id="${p.id}">+ Add to list</button>`;
     return `
     <div class="card ${isSel ? "selected" : ""}" data-id="${p.id}">
       <div class="card-photo" data-action="zoom" data-id="${p.id}">
@@ -130,7 +121,9 @@
         <div class="card-name">${escapeHtml(p.name)}</div>
         <span class="card-code">${escapeHtml(p.code)}</span>
         ${priceHtml}
-        ${actionHtml}
+        <button class="add-btn ${isSel ? "on" : ""}" data-action="toggle" data-id="${p.id}">
+          ${isSel ? "✓ Added to list" : "+ Add to list"}
+        </button>
       </div>
     </div>`;
   }
@@ -145,48 +138,13 @@
     els.grid.querySelectorAll('[data-action="zoom"]').forEach(el => {
       el.addEventListener("click", () => openZoom(parseInt(el.dataset.id, 10)));
     });
-    els.grid.querySelectorAll('[data-action="inc"]').forEach(el => {
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        bumpQty(parseInt(el.dataset.id, 10), 1);
-      });
-    });
-    els.grid.querySelectorAll('[data-action="dec"]').forEach(el => {
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        bumpQty(parseInt(el.dataset.id, 10), -1);
-      });
-    });
-    els.grid.querySelectorAll('[data-action="qtyinput"]').forEach(el => {
-      el.addEventListener("click", (e) => e.stopPropagation());
-      el.addEventListener("change", (e) => {
-        e.stopPropagation();
-        setQty(parseInt(el.dataset.id, 10), parseInt(el.value, 10));
-      });
-    });
   }
 
   function toggleSelect(id) {
     const p = PRODUCTS.find(x => x.id === id);
     if (!p) return;
     if (selected.has(id)) selected.delete(id);
-    else selected.set(id, { product: p, qty: 1 });
-    renderGrid();
-    renderSelectionBar();
-  }
-
-  function setQty(id, qty) {
-    if (!selected.has(id)) return;
-    const clean = Math.max(1, Number.isFinite(qty) ? Math.floor(qty) : 1);
-    selected.get(id).qty = clean;
-    renderGrid();
-    renderSelectionBar();
-  }
-
-  function bumpQty(id, delta) {
-    if (!selected.has(id)) return;
-    const entry = selected.get(id);
-    entry.qty = Math.max(1, entry.qty + delta);
+    else selected.set(id, p);
     renderGrid();
     renderSelectionBar();
   }
@@ -228,15 +186,6 @@
     const p = PRODUCTS.find(x => x.id === id);
     if (!p) return;
     const isSel = selected.has(id);
-    const qty = isSel ? selected.get(id).qty : 1;
-    const qtyRowHtml = isSel
-      ? `<div class="qty-row" style="width:100%;margin-top:10px">
-          <button class="qty-btn" id="modalDec">−</button>
-          <input class="qty-input" type="number" min="1" step="1" value="${qty}" id="modalQtyInput">
-          <button class="qty-btn" id="modalInc">+</button>
-          <button class="qty-remove" id="modalToggle" style="flex:1">✓ Added to list</button>
-        </div>`
-      : `<button class="add-btn" id="modalToggle" style="width:100%;margin-top:10px">+ Add to list</button>`;
     els.modalRoot.innerHTML = `
       <div class="modal-overlay" id="modalOverlay">
         <div class="modal-box" style="position:relative">
@@ -247,7 +196,7 @@
             <div style="font-size:14px;margin:4px 0 8px">${escapeHtml(p.name)}</div>
             <span class="card-code" style="font-size:13px">${escapeHtml(p.code)}</span>
             ${p.price ? `<div class="card-price" style="margin-top:8px"><span class="p">₹${escapeHtml(p.price)}</span>${p.mrp?`<span class="mrp">₹${escapeHtml(p.mrp)}</span>`:""}</div>` : ""}
-            ${qtyRowHtml}
+            <button class="add-btn ${isSel?"on":""}" id="modalToggle" style="width:100%;margin-top:10px">${isSel?"✓ Added to list":"+ Add to list"}</button>
           </div>
         </div>
       </div>`;
@@ -259,36 +208,25 @@
       toggleSelect(id);
       openZoom(id);
     });
-    const decBtn = document.getElementById("modalDec");
-    const incBtn = document.getElementById("modalInc");
-    const qtyInput = document.getElementById("modalQtyInput");
-    if (decBtn) decBtn.addEventListener("click", () => { bumpQty(id, -1); openZoom(id); });
-    if (incBtn) incBtn.addEventListener("click", () => { bumpQty(id, 1); openZoom(id); });
-    if (qtyInput) qtyInput.addEventListener("change", () => { setQty(id, parseInt(qtyInput.value, 10)); openZoom(id); });
   }
   function closeZoom() { els.modalRoot.innerHTML = ""; }
 
   // ---------- selection list view ----------
   function openListModal() {
-    const items = [...selected.entries()]; // [id, {product, qty}]
+    const items = [...selected.values()];
     els.modalRoot.innerHTML = `
       <div class="modal-overlay" id="modalOverlay">
-        <div class="modal-box" style="max-width:460px;max-height:80vh;overflow:auto;position:relative">
+        <div class="modal-box" style="max-width:440px;max-height:80vh;overflow:auto;position:relative">
           <button class="modal-close" id="modalCloseBtn" style="position:sticky;top:10px;left:100%;background:rgba(0,0,0,.35);color:#fff">&times;</button>
           <div class="modal-info" style="padding-top:0">
             <div style="font-weight:700;margin-bottom:10px;font-size:15px">Selected products (${items.length})</div>
-            ${items.map(([id, entry]) => `
+            ${items.map(p => `
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:13px">${escapeHtml(entry.product.name)}</div>
-                  <span class="card-code" style="margin-top:4px">${escapeHtml(entry.product.code)}</span>
+                <div>
+                  <div style="font-size:13px">${escapeHtml(p.name)}</div>
+                  <span class="card-code" style="margin-top:4px">${escapeHtml(p.code)}</span>
                 </div>
-                <div class="qty-row" style="flex:none">
-                  <button class="qty-btn" data-dec="${id}">−</button>
-                  <input class="qty-input" type="number" min="1" step="1" value="${entry.qty}" data-qty="${id}">
-                  <button class="qty-btn" data-inc="${id}">+</button>
-                </div>
-                <button data-remove="${id}" style="border:none;background:none;color:#a33;cursor:pointer;font-size:18px">&times;</button>
+                <button data-remove="${p.id}" style="border:none;background:none;color:#a33;cursor:pointer;font-size:18px">&times;</button>
               </div>`).join("")}
           </div>
         </div>
@@ -303,30 +241,18 @@
         renderGrid(); renderSelectionBar(); openListModal();
       });
     });
-    els.modalRoot.querySelectorAll("[data-inc]").forEach(btn => {
-      btn.addEventListener("click", () => { bumpQty(parseInt(btn.dataset.inc, 10), 1); openListModal(); });
-    });
-    els.modalRoot.querySelectorAll("[data-dec]").forEach(btn => {
-      btn.addEventListener("click", () => { bumpQty(parseInt(btn.dataset.dec, 10), -1); openListModal(); });
-    });
-    els.modalRoot.querySelectorAll("[data-qty]").forEach(inp => {
-      inp.addEventListener("change", () => {
-        setQty(parseInt(inp.dataset.qty, 10), parseInt(inp.value, 10));
-        openListModal();
-      });
-    });
   }
 
   // ---------- export ----------
   function exportExcel() {
     const items = [...selected.values()];
     if (!items.length) return;
-    const rows = items.map((entry, i) => ({
+    const rows = items.map((p, i) => ({
       "S.No": i + 1,
-      "Product Name": entry.product.name,
-      "Code": entry.product.code,
-      "Price (Rs)": entry.product.price || "",
-      "Quantity": entry.qty,
+      "Product Name": p.name,
+      "Code": p.code,
+      "Price (Rs)": p.price || "",
+      "Quantity": "",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     ws["!cols"] = [{wch:6},{wch:55},{wch:14},{wch:12},{wch:10}];
@@ -339,7 +265,7 @@
   function copyAsText() {
     const items = [...selected.values()];
     if (!items.length) return;
-    const text = items.map((entry, i) => `${i+1}. ${entry.product.name} — ${entry.product.code} — Qty: ${entry.qty}`).join("\n");
+    const text = items.map((p, i) => `${i+1}. ${p.name} — ${p.code}`).join("\n");
     navigator.clipboard.writeText(text).then(() => {
       els.copyBtn.textContent = "Copied!";
       setTimeout(() => { els.copyBtn.innerHTML = copyBtnOriginal; }, 1500);
