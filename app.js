@@ -8,7 +8,7 @@
     section: "",
     page: 1,
   };
-  let selected = new Map(); // id -> product
+  let selected = new Map(); // id -> { product, qty }
 
   const els = {
     search: document.getElementById("searchInput"),
@@ -62,16 +62,85 @@
   // ---------- filtering ----------
   function normalize(s) { return (s || "").toLowerCase(); }
 
+  // Split a token at digit/letter boundaries so "6a" also yields "6" and "a",
+  // and "12m" also yields "12" and "m" - lets "6 a switch" and "6a switch"
+  // and "16A" all match the same product regardless of spacing.
+  function splitUnits(tok) {
+    const out = [tok];
+    const m = tok.match(/^(\d+)([a-z]+)$/);
+    if (m) { out.push(m[1], m[2]); }
+    return out;
+  }
+
+  // Tokenized, typo-forgiving search. Handles real-world shorthand like
+  // "12M cover" matching "12 Module Cover Plate..." and small typos like
+  // "swich" matching "switch".
+  function buildHaystackWords(p) {
+    let s = normalize(p.name + ' ' + p.code + ' ' + p.section + ' ' + p.series);
+    s = s.replace(/\bmodules?\b/g, 'm');
+    const raw = s.split(/[^a-z0-9]+/).filter(Boolean);
+    const out = [];
+    for (const t of raw) out.push(...splitUnits(t));
+    return out;
+  }
+  // Precompute once - avoids re-splitting every product's text on every keystroke.
+  for (const p of PRODUCTS) p._words = buildHaystackWords(p);
+
+  function tokenizeQuery(q) {
+    const raw = normalize(q).split(/[^a-z0-9]+/).filter(Boolean);
+    const out = [];
+    for (const t of raw) out.push(...splitUnits(t));
+    return out;
+  }
+
+  // Small edit-distance check (typo tolerance), capped so it stays cheap.
+  function withinEditDistance(a, b, maxDist) {
+    if (Math.abs(a.length - b.length) > maxDist) return false;
+    if (a === b) return true;
+    const al = a.length, bl = b.length;
+    let prev = new Array(bl + 1);
+    for (let j = 0; j <= bl; j++) prev[j] = j;
+    for (let i = 1; i <= al; i++) {
+      const cur = [i];
+      let rowMin = i;
+      for (let j = 1; j <= bl; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        cur.push(v);
+        if (v < rowMin) rowMin = v;
+      }
+      if (rowMin > maxDist) return false; // early exit
+      prev = cur;
+    }
+    return prev[bl] <= maxDist;
+  }
+
+  function tokenMatchesWord(t, w) {
+    if (t.length <= 2) return w === t; // short tokens ("m", "6a") need exact match
+    if (w.startsWith(t)) return true; // haystack word extends what the user typed
+    if (/\d/.test(t)) return false; // anything with a digit (codes, ratings, dimensions) must match exactly/by prefix only - never fuzzy, since e.g. "66101" and "66111" or "WIM2501" and "WIM2731" are unrelated products despite being close by edit distance
+    const maxDist = t.length <= 5 ? 1 : 2;
+    return withinEditDistance(t, w, maxDist);
+  }
+
+  function productMatches(p, query) {
+    if (!query.trim()) return true;
+    // fast path: plain substring match (covers most code/name searches instantly)
+    const plain = normalize(p.name) + " " + normalize(p.code) + " " + normalize(p.section);
+    if (plain.includes(normalize(query).trim())) return true;
+    // tokenized AND-match: every query word must match some word in the
+    // product, in any order, tolerating typos and spacing differences.
+    const tokens = tokenizeQuery(query);
+    if (!tokens.length) return true;
+    return tokens.every(t => p._words.some(w => tokenMatchesWord(t, w)));
+  }
+
   function getFiltered() {
-    const q = normalize(state.query).trim();
+    const q = state.query;
     return PRODUCTS.filter(p => {
       if (state.series && p.series !== state.series) return false;
       if (state.section && p.section !== state.section) return false;
-      if (q) {
-        const hay = normalize(p.name) + " " + normalize(p.code) + " " + normalize(p.section);
-        if (!hay.includes(q)) return false;
-      }
-      return true;
+      return productMatches(p, q);
     });
   }
 
@@ -101,13 +170,22 @@
   }
 
   function cardHtml(p) {
-    const isSel = selected.has(p.id);
+    const sel = selected.get(p.id);
+    const isSel = !!sel;
     const priceHtml = p.price
       ? `<div class="card-price"><span class="p">₹${escapeHtml(p.price)}</span>${p.mrp ? `<span class="mrp">₹${escapeHtml(p.mrp)}</span>` : ""}</div>`
       : `<div class="card-price">&nbsp;</div>`;
     const imgHtml = p.img
       ? `<img src="images/${encodeURIComponent(p.img)}" alt="${escapeHtml(p.code)}" loading="lazy">`
       : `<div class="noimg">${escapeHtml(p.code)}<br>no photo</div>`;
+    const actionHtml = isSel
+      ? `<div class="qty-row">
+           <button class="qty-btn" data-action="qty-dec" data-id="${p.id}" aria-label="Decrease quantity">−</button>
+           <input class="qty-input" type="number" min="1" inputmode="numeric" value="${sel.qty}" data-action="qty-set" data-id="${p.id}">
+           <button class="qty-btn" data-action="qty-inc" data-id="${p.id}" aria-label="Increase quantity">+</button>
+           <button class="qty-remove" data-action="toggle" data-id="${p.id}" aria-label="Remove from list">✓</button>
+         </div>`
+      : `<button class="add-btn" data-action="toggle" data-id="${p.id}">+ Add to list</button>`;
     return `
     <div class="card ${isSel ? "selected" : ""}" data-id="${p.id}">
       <div class="card-photo" data-action="zoom" data-id="${p.id}">
@@ -121,9 +199,7 @@
         <div class="card-name">${escapeHtml(p.name)}</div>
         <span class="card-code">${escapeHtml(p.code)}</span>
         ${priceHtml}
-        <button class="add-btn ${isSel ? "on" : ""}" data-action="toggle" data-id="${p.id}">
-          ${isSel ? "✓ Added to list" : "+ Add to list"}
-        </button>
+        ${actionHtml}
       </div>
     </div>`;
   }
@@ -138,13 +214,42 @@
     els.grid.querySelectorAll('[data-action="zoom"]').forEach(el => {
       el.addEventListener("click", () => openZoom(parseInt(el.dataset.id, 10)));
     });
+    els.grid.querySelectorAll('[data-action="qty-inc"]').forEach(el => {
+      el.addEventListener("click", (e) => { e.stopPropagation(); changeQty(parseInt(el.dataset.id, 10), 1); });
+    });
+    els.grid.querySelectorAll('[data-action="qty-dec"]').forEach(el => {
+      el.addEventListener("click", (e) => { e.stopPropagation(); changeQty(parseInt(el.dataset.id, 10), -1); });
+    });
+    els.grid.querySelectorAll('[data-action="qty-set"]').forEach(el => {
+      el.addEventListener("click", (e) => e.stopPropagation());
+      el.addEventListener("change", (e) => {
+        e.stopPropagation();
+        setQty(parseInt(el.dataset.id, 10), parseInt(el.value, 10));
+      });
+    });
   }
 
   function toggleSelect(id) {
     const p = PRODUCTS.find(x => x.id === id);
     if (!p) return;
     if (selected.has(id)) selected.delete(id);
-    else selected.set(id, p);
+    else selected.set(id, { product: p, qty: 1 });
+    renderGrid();
+    renderSelectionBar();
+  }
+
+  function changeQty(id, delta) {
+    const sel = selected.get(id);
+    if (!sel) return;
+    sel.qty = Math.max(1, sel.qty + delta);
+    renderGrid();
+    renderSelectionBar();
+  }
+
+  function setQty(id, val) {
+    const sel = selected.get(id);
+    if (!sel) return;
+    sel.qty = (isNaN(val) || val < 1) ? 1 : val;
     renderGrid();
     renderSelectionBar();
   }
@@ -185,7 +290,8 @@
   function openZoom(id) {
     const p = PRODUCTS.find(x => x.id === id);
     if (!p) return;
-    const isSel = selected.has(id);
+    const sel = selected.get(id);
+    const isSel = !!sel;
     els.modalRoot.innerHTML = `
       <div class="modal-overlay" id="modalOverlay">
         <div class="modal-box" style="position:relative">
@@ -196,7 +302,15 @@
             <div style="font-size:14px;margin:4px 0 8px">${escapeHtml(p.name)}</div>
             <span class="card-code" style="font-size:13px">${escapeHtml(p.code)}</span>
             ${p.price ? `<div class="card-price" style="margin-top:8px"><span class="p">₹${escapeHtml(p.price)}</span>${p.mrp?`<span class="mrp">₹${escapeHtml(p.mrp)}</span>`:""}</div>` : ""}
-            <button class="add-btn ${isSel?"on":""}" id="modalToggle" style="width:100%;margin-top:10px">${isSel?"✓ Added to list":"+ Add to list"}</button>
+            ${isSel
+              ? `<div class="qty-row" style="margin-top:10px;width:100%">
+                   <button class="qty-btn" id="modalQtyDec">−</button>
+                   <input class="qty-input" type="number" min="1" id="modalQtyInput" value="${sel.qty}">
+                   <button class="qty-btn" id="modalQtyInc">+</button>
+                   <button class="qty-remove" id="modalToggle" style="margin-left:auto">✓ Remove</button>
+                 </div>`
+              : `<button class="add-btn" id="modalToggle" style="width:100%;margin-top:10px">+ Add to list</button>`
+            }
           </div>
         </div>
       </div>`;
@@ -208,25 +322,36 @@
       toggleSelect(id);
       openZoom(id);
     });
+    const decBtn = document.getElementById("modalQtyDec");
+    const incBtn = document.getElementById("modalQtyInc");
+    const qtyInput = document.getElementById("modalQtyInput");
+    if (decBtn) decBtn.addEventListener("click", () => { changeQty(id, -1); openZoom(id); });
+    if (incBtn) incBtn.addEventListener("click", () => { changeQty(id, 1); openZoom(id); });
+    if (qtyInput) qtyInput.addEventListener("change", () => { setQty(id, parseInt(qtyInput.value, 10)); openZoom(id); });
   }
   function closeZoom() { els.modalRoot.innerHTML = ""; }
 
   // ---------- selection list view ----------
   function openListModal() {
-    const items = [...selected.values()];
+    const entries = [...selected.entries()];
     els.modalRoot.innerHTML = `
       <div class="modal-overlay" id="modalOverlay">
         <div class="modal-box" style="max-width:440px;max-height:80vh;overflow:auto;position:relative">
           <button class="modal-close" id="modalCloseBtn" style="position:sticky;top:10px;left:100%;background:rgba(0,0,0,.35);color:#fff">&times;</button>
           <div class="modal-info" style="padding-top:0">
-            <div style="font-weight:700;margin-bottom:10px;font-size:15px">Selected products (${items.length})</div>
-            ${items.map(p => `
+            <div style="font-weight:700;margin-bottom:10px;font-size:15px">Selected products (${entries.length})</div>
+            ${entries.map(([id, sel]) => `
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)">
                 <div>
-                  <div style="font-size:13px">${escapeHtml(p.name)}</div>
-                  <span class="card-code" style="margin-top:4px">${escapeHtml(p.code)}</span>
+                  <div style="font-size:13px">${escapeHtml(sel.product.name)}</div>
+                  <span class="card-code" style="margin-top:4px">${escapeHtml(sel.product.code)}</span>
                 </div>
-                <button data-remove="${p.id}" style="border:none;background:none;color:#a33;cursor:pointer;font-size:18px">&times;</button>
+                <div class="qty-row" style="flex:none">
+                  <button class="qty-btn" data-qdec="${id}">−</button>
+                  <input class="qty-input" type="number" min="1" value="${sel.qty}" data-qset="${id}">
+                  <button class="qty-btn" data-qinc="${id}">+</button>
+                  <button data-remove="${id}" style="border:none;background:none;color:#a33;cursor:pointer;font-size:18px">&times;</button>
+                </div>
               </div>`).join("")}
           </div>
         </div>
@@ -241,18 +366,27 @@
         renderGrid(); renderSelectionBar(); openListModal();
       });
     });
+    els.modalRoot.querySelectorAll("[data-qinc]").forEach(btn => {
+      btn.addEventListener("click", () => { changeQty(parseInt(btn.dataset.qinc, 10), 1); renderGrid(); openListModal(); });
+    });
+    els.modalRoot.querySelectorAll("[data-qdec]").forEach(btn => {
+      btn.addEventListener("click", () => { changeQty(parseInt(btn.dataset.qdec, 10), -1); renderGrid(); openListModal(); });
+    });
+    els.modalRoot.querySelectorAll("[data-qset]").forEach(inp => {
+      inp.addEventListener("change", () => { setQty(parseInt(inp.dataset.qset, 10), parseInt(inp.value, 10)); renderGrid(); openListModal(); });
+    });
   }
 
   // ---------- export ----------
   function exportExcel() {
-    const items = [...selected.values()];
-    if (!items.length) return;
-    const rows = items.map((p, i) => ({
+    const entries = [...selected.values()];
+    if (!entries.length) return;
+    const rows = entries.map((sel, i) => ({
       "S.No": i + 1,
-      "Product Name": p.name,
-      "Code": p.code,
-      "Price (Rs)": p.price || "",
-      "Quantity": "",
+      "Product Name": sel.product.name,
+      "Code": sel.product.code,
+      "Price (Rs)": sel.product.price || "",
+      "Quantity": sel.qty,
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     ws["!cols"] = [{wch:6},{wch:55},{wch:14},{wch:12},{wch:10}];
@@ -263,9 +397,9 @@
   }
 
   function copyAsText() {
-    const items = [...selected.values()];
-    if (!items.length) return;
-    const text = items.map((p, i) => `${i+1}. ${p.name} — ${p.code}`).join("\n");
+    const entries = [...selected.values()];
+    if (!entries.length) return;
+    const text = entries.map((sel, i) => `${i+1}. ${sel.product.name} — ${sel.product.code} — Qty: ${sel.qty}`).join("\n");
     navigator.clipboard.writeText(text).then(() => {
       els.copyBtn.textContent = "Copied!";
       setTimeout(() => { els.copyBtn.innerHTML = copyBtnOriginal; }, 1500);
